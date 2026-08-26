@@ -40,9 +40,12 @@ import {
   getTargetStructures
 } from "./sequenceGenerators.js";
 import {
+  buildAffirmationList,
   buildSrt,
   buildSsml,
   buildTtsScript,
+  getAudioVoiceOptions,
+  getDefaultAudioVoice,
   getDefaultTtsProfile,
   getDefaultTtsReadMode,
   getTtsProfiles,
@@ -95,8 +98,7 @@ function getExportFileName(fileName, suffix, extension) {
   return `${stem}-${suffix}.${extension}`;
 }
 
-function downloadTextFile(content, fileName, type = "text/plain;charset=utf-8") {
-  const blob = new Blob([content], { type });
+function downloadBlob(blob, fileName) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -105,6 +107,10 @@ function downloadTextFile(content, fileName, type = "text/plain;charset=utf-8") 
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function downloadTextFile(content, fileName, type = "text/plain;charset=utf-8") {
+  downloadBlob(new Blob([content], { type }), fileName);
 }
 
 function StatusPill({ status }) {
@@ -500,10 +506,19 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   const [ttsVoiceUri, setTtsVoiceUri] = useState("");
   const [ttsVoices, setTtsVoices] = useState([]);
   const [ttsPreviewing, setTtsPreviewing] = useState(false);
+  const [ttsAudioVoiceId, setTtsAudioVoiceId] = useState(getDefaultAudioVoice().id);
+  const [ttsAudioRendering, setTtsAudioRendering] = useState("");
+  const [ttsAudioStatus, setTtsAudioStatus] = useState("");
   const profiles = getSequenceProfiles();
   const ttsProfiles = getTtsProfiles();
   const ttsReadModes = getTtsReadModes();
+  const ttsAudioVoices = getAudioVoiceOptions();
   const ttsProfile = ttsProfiles.find((profile) => profile.id === ttsProfileId) || getDefaultTtsProfile();
+  const ttsAudioVoice = ttsAudioVoices.find((voice) => voice.id === ttsAudioVoiceId) || getDefaultAudioVoice();
+  const affirmationExportText = useMemo(
+    () => affirmationText ? buildAffirmationList(affirmationText) : "",
+    [affirmationText]
+  );
   const ttsScript = useMemo(
     () => affirmationText ? buildTtsScript(affirmationText, ttsReadMode) : "",
     [affirmationText, ttsReadMode]
@@ -716,9 +731,9 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   };
 
   const handleExport = () => {
-    if (!affirmationText) return;
+    if (!affirmationExportText) return;
 
-    downloadTextFile(affirmationText, fileName || "affirmation.txt");
+    downloadTextFile(affirmationExportText, fileName || "affirmation.txt");
     setExported(true);
   };
 
@@ -776,6 +791,26 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
     );
   };
 
+  const handleExportTtsAudio = async (format) => {
+    if (!ttsScript || ttsAudioRendering) return;
+
+    const label = format.toUpperCase();
+    setTtsAudioRendering(format);
+    setTtsAudioStatus(`Rendering ${label}`);
+
+    try {
+      const { createTtsAudioBlob } = await import("./audioExport.js");
+      const { blob, extension } = await createTtsAudioBlob(ttsScript, ttsProfile, ttsAudioVoice, format);
+      downloadBlob(blob, getExportFileName(fileName, "tts-audio", extension));
+      setTtsAudioStatus(`${label} export ready`);
+    } catch (error) {
+      console.error(error);
+      setTtsAudioStatus(`${label} export failed`);
+    } finally {
+      setTtsAudioRendering("");
+    }
+  };
+
   return (
     <section className="affirmation-panel" aria-label="Affirmation batch splice generator">
       <div className="affirmation-head">
@@ -791,7 +826,7 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
           </label>
           <button className="command-button" type="button" disabled={!affirmationText} onClick={handleExport}>
             <Download size={16} />
-            Export affirmation.txt
+            Export affirmation list
           </button>
         </div>
       </div>
@@ -806,9 +841,9 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
         <div className="tts-panel-head">
           <div>
             <h3>HQ TTS Export</h3>
-            <p>{ttsStats.words} words · {ttsEstimatedMinutes} min est. · {ttsStats.characters} chars</p>
+            <p>{ttsStats.words} words · {ttsEstimatedMinutes} min est. · {ttsStats.characters} chars · {ttsAudioStatus || `${ttsAudioVoice.label} audio`}</p>
           </div>
-          <span className={ttsScript ? "status-pill passed" : "status-pill flagged"}>{ttsScript ? "Ready" : "Idle"}</span>
+          <span className={ttsScript ? "status-pill passed" : "status-pill flagged"}>{ttsAudioRendering ? "Rendering" : ttsScript ? "Ready" : "Idle"}</span>
         </div>
         <div className="tts-controls">
           <label>
@@ -828,11 +863,19 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
             </select>
           </label>
           <label>
-            <span>Voice</span>
+            <span>Preview voice</span>
             <select value={ttsVoiceUri} onChange={(event) => setTtsVoiceUri(event.target.value)} disabled={!supportsTtsPreview} aria-label="TTS preview voice">
               <option value="">System default</option>
               {ttsVoices.map((voice) => (
                 <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Export voice</span>
+            <select value={ttsAudioVoiceId} onChange={(event) => setTtsAudioVoiceId(event.target.value)} aria-label="TTS audio export voice">
+              {ttsAudioVoices.map((voice) => (
+                <option key={voice.id} value={voice.id}>{voice.label}</option>
               ))}
             </select>
           </label>
@@ -853,6 +896,14 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
           <button className="command-button" type="button" disabled={!ttsScript} onClick={handleExportTtsSrt}>
             <Download size={16} />
             Export SRT
+          </button>
+          <button className="command-button primary" type="button" disabled={!ttsScript || Boolean(ttsAudioRendering)} onClick={() => handleExportTtsAudio("wav")}>
+            <FileDown size={16} />
+            {ttsAudioRendering === "wav" ? "Rendering WAV" : "Export WAV"}
+          </button>
+          <button className="command-button" type="button" disabled={!ttsScript || Boolean(ttsAudioRendering)} onClick={() => handleExportTtsAudio("mp3")}>
+            <Volume2 size={16} />
+            {ttsAudioRendering === "mp3" ? "Rendering MP3" : "Export MP3"}
           </button>
         </div>
       </div>

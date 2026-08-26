@@ -977,9 +977,9 @@ h2 {
 
 .tts-panel {
   display: grid;
-  grid-template-columns: minmax(220px, 0.52fr) minmax(320px, 1fr) auto;
+  grid-template-columns: minmax(210px, 0.38fr) minmax(420px, 1fr);
   gap: 9px;
-  align-items: end;
+  align-items: start;
   min-width: 0;
   margin-bottom: 10px;
   padding: 9px;
@@ -994,6 +994,14 @@ h2 {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+}
+
+.tts-panel-head > div {
+  min-width: 0;
+}
+
+.tts-panel-head .status-pill {
+  flex: 0 0 auto;
 }
 
 .tts-panel-head h3 {
@@ -1013,7 +1021,7 @@ h2 {
 
 .tts-controls {
   display: grid;
-  grid-template-columns: repeat(3, minmax(96px, 1fr));
+  grid-template-columns: repeat(4, minmax(96px, 1fr));
   gap: 7px;
   min-width: 0;
 }
@@ -1037,9 +1045,10 @@ h2 {
 }
 
 .tts-actions {
+  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 7px;
 }
 

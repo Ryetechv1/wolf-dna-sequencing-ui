@@ -4,6 +4,9 @@ const ttsProfiles = [
     label: "Studio",
     rate: "medium",
     pitch: "+0st",
+    audioPitch: 50,
+    audioSpeed: 154,
+    audioWordGap: 1,
     previewRate: 0.94,
     previewPitch: 1,
     breakMs: 420
@@ -13,6 +16,9 @@ const ttsProfiles = [
     label: "Clinical",
     rate: "slow",
     pitch: "+1st",
+    audioPitch: 56,
+    audioSpeed: 132,
+    audioWordGap: 1,
     previewRate: 0.88,
     previewPitch: 1.05,
     breakMs: 320
@@ -22,16 +28,91 @@ const ttsProfiles = [
     label: "Cinematic",
     rate: "slow",
     pitch: "-2st",
+    audioPitch: 38,
+    audioSpeed: 118,
+    audioWordGap: 3,
     previewRate: 0.82,
     previewPitch: 0.88,
     breakMs: 620
+  },
+  {
+    id: "broadcast",
+    label: "Broadcast",
+    rate: "medium",
+    pitch: "+0st",
+    audioPitch: 48,
+    audioSpeed: 174,
+    audioWordGap: 0,
+    previewRate: 1.04,
+    previewPitch: 1,
+    breakMs: 280
+  },
+  {
+    id: "meditative",
+    label: "Meditative",
+    rate: "x-slow",
+    pitch: "+2st",
+    audioPitch: 62,
+    audioSpeed: 104,
+    audioWordGap: 5,
+    previewRate: 0.72,
+    previewPitch: 1.12,
+    breakMs: 760
+  },
+  {
+    id: "field",
+    label: "Field Log",
+    rate: "medium",
+    pitch: "-1st",
+    audioPitch: 44,
+    audioSpeed: 148,
+    audioWordGap: 1,
+    previewRate: 0.98,
+    previewPitch: 0.94,
+    breakMs: 360
+  },
+  {
+    id: "oracle",
+    label: "Oracle",
+    rate: "slow",
+    pitch: "+3st",
+    audioPitch: 66,
+    audioSpeed: 96,
+    audioWordGap: 6,
+    previewRate: 0.68,
+    previewPitch: 1.18,
+    breakMs: 860
+  },
+  {
+    id: "rapid",
+    label: "Rapid Review",
+    rate: "fast",
+    pitch: "+0st",
+    audioPitch: 52,
+    audioSpeed: 214,
+    audioWordGap: 0,
+    previewRate: 1.18,
+    previewPitch: 1,
+    breakMs: 180
   }
 ];
 
 const readModes = [
+  { id: "affirmations", label: "Affirmation List" },
   { id: "summary", label: "Narrated Summary" },
   { id: "bases", label: "Exact Base Readout" },
   { id: "full", label: "Full File" }
+];
+
+const audioVoiceOptions = [
+  { id: "atlas", label: "Atlas", variant: "m3", pitchOffset: -4, speedOffset: -4, amplitude: 100 },
+  { id: "sentinel", label: "Sentinel", variant: "m4", pitchOffset: -10, speedOffset: -8, amplitude: 105 },
+  { id: "ranger", label: "Ranger", variant: "m5", pitchOffset: -2, speedOffset: 8, amplitude: 102 },
+  { id: "nova", label: "Nova", variant: "f2", pitchOffset: 6, speedOffset: 0, amplitude: 96 },
+  { id: "crystal", label: "Crystal", variant: "f5", pitchOffset: 10, speedOffset: 2, amplitude: 94 },
+  { id: "oracle", label: "Oracle", variant: "f4", pitchOffset: 3, speedOffset: -18, amplitude: 98 },
+  { id: "whisper", label: "Whisper", variant: "whisper", pitchOffset: -6, speedOffset: -12, amplitude: 115 },
+  { id: "soft-whisper", label: "Soft Whisper", variant: "whisperf", pitchOffset: 4, speedOffset: -16, amplitude: 108 }
 ];
 
 const blockPattern = /=== LupineSeq Batch Splice Injection ===([\s\S]*?)=== End LupineSeq Batch Splice Injection ===/g;
@@ -51,6 +132,14 @@ export function getDefaultTtsProfile() {
 
 export function getDefaultTtsReadMode() {
   return readModes[0];
+}
+
+export function getAudioVoiceOptions() {
+  return audioVoiceOptions;
+}
+
+export function getDefaultAudioVoice() {
+  return audioVoiceOptions[0];
 }
 
 function parseMetadata(header) {
@@ -140,6 +229,103 @@ function buildSummary(blocks) {
   });
 }
 
+function formatSampleLabel(sample) {
+  return sample.replace(/\s*\([^)]*\)\s*$/, "").trim() || "the selected sample";
+}
+
+function formatSubject(value) {
+  if (value === "wolf") return "wolf";
+  if (value === "human") return "human";
+  return value ? value.replace(/[_-]+/g, " ").toLowerCase() : "sample";
+}
+
+function extractFocusSystem(block) {
+  const firstSequence = block.sequences[0];
+  const parenthetical = block.focus.match(/\(([^)]*)\)/)?.[1] || "";
+
+  return {
+    focus: firstSequence?.structure || block.focus.replace(/\s*\([^)]*\)\s*$/, "").trim() || "the selected focus",
+    system: firstSequence?.system || parenthetical
+  };
+}
+
+function toAffirmationLine(value) {
+  const cleaned = withSentenceEnding(cleanSpeechText(value).replace(/^[-*\d.)\s]+/, ""));
+  if (!cleaned) {
+    return "";
+  }
+
+  if (/^i affirm\b/i.test(cleaned)) {
+    return `I${cleaned.slice(1)}`;
+  }
+
+  if (/^i\s/i.test(cleaned)) {
+    return `I affirm that I${cleaned.slice(1)}`;
+  }
+
+  const normalized = cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+  return `I affirm ${normalized}`;
+}
+
+function buildBaseAffirmations(text) {
+  const baseAffirmation = getBaseAffirmation(text);
+  if (!baseAffirmation) {
+    return [];
+  }
+
+  return baseAffirmation
+    .split(/\r\n|\r|\n|(?<=[.!?])\s+/)
+    .map(toAffirmationLine)
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function buildBlockAffirmations(block) {
+  const { focus, system } = extractFocusSystem(block);
+  const sample = formatSampleLabel(block.sample);
+  const subject = formatSubject(block.sequences[0]?.subject || block.target.replace(/\s+Splicing$/i, ""));
+  const totalBases = block.sequences.reduce((sum, sequence) => sum + sequence.bases, 0);
+  const sequenceWord = block.sequences.length === 1 ? "sequence" : "sequences";
+  const systemClause = system ? `, supporting ${system.toLowerCase()}` : "";
+
+  return [
+    `I affirm ${block.target} for ${sample} is focused on ${focus}${systemClause}.`,
+    ...block.sequences.map((sequence) =>
+      `I affirm the ${subject} ${formatSequenceName(sequence.sequenceType)} sequence is staged for ${focus} with ${sequence.bases} bases${sequence.gc ? ` at ${sequence.gc} percent GC` : ""}.`
+    ),
+    `I affirm ${block.target} completed ${block.sequences.length} ${sequenceWord} totaling ${totalBases} bases for ${focus}.`
+  ];
+}
+
+function uniqueLines(lines) {
+  const seen = new Set();
+  return lines.filter((line) => {
+    const key = line.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+export function buildAffirmationList(text) {
+  const blocks = parseInjectionBlocks(text);
+  const baseLines = buildBaseAffirmations(text);
+  const blockLines = blocks.flatMap(buildBlockAffirmations);
+  const lines = uniqueLines([
+    ...baseLines,
+    ...blockLines
+  ]);
+
+  if (lines.length > 0) {
+    return `${lines.join("\n")}\n`;
+  }
+
+  return "I affirm the imported affirmation file is ready for sequencing focus.\n";
+}
+
 function buildBaseReadout(blocks) {
   return blocks.flatMap((block) => [
     `${block.target}. ${block.sample}. Focus ${block.focus}.`,
@@ -155,6 +341,10 @@ export function buildTtsScript(text, mode = "summary") {
   const lead = baseAffirmation
     ? [`Affirmation file. ${withSentenceEnding(cleanSpeechText(baseAffirmation))}`]
     : ["Affirmation file."];
+
+  if (mode === "affirmations") {
+    return buildAffirmationList(text);
+  }
 
   if (mode === "bases") {
     return [...lead, ...buildBaseReadout(blocks)].join("\n\n");
