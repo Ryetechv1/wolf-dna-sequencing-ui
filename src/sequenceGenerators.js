@@ -60,25 +60,71 @@ export function getSequenceProfiles() {
   return sequenceProfiles;
 }
 
-function seededRandom(seed) {
-  let value = 0;
-  for (let index = 0; index < seed.length; index += 1) {
-    value = (value << 5) - value + seed.charCodeAt(index);
-    value |= 0;
-  }
-
-  return () => {
-    value = (value * 1664525 + 1013904223) | 0;
-    return ((value >>> 0) % 10000) / 10000;
-  };
+function uniqueAlphabet(profile) {
+  return [...new Set(profile.alphabet.split(""))];
 }
 
-function buildSequence(profile, sampleId) {
-  const random = seededRandom(`${sampleId}-${profile.id}-${profile.length}`);
-  const bodyLength = Math.max(0, profile.length - profile.motif.length - profile.ending.length);
+function variableBodyLength(profile) {
+  return Math.max(0, profile.length - profile.motif.length - profile.ending.length);
+}
+
+export function getSequenceCapacity(profile) {
+  return BigInt(uniqueAlphabet(profile).length) ** BigInt(variableBodyLength(profile));
+}
+
+export function formatSequenceCount(value) {
+  const text = String(value);
+  if (text.length > 9) {
+    return `${text[0]}.${text.slice(1, 3)}e+${text.length - 1}`;
+  }
+
+  return Number(text).toLocaleString("en-US");
+}
+
+function hashBigInt(seed) {
+  let value = 1469598103934665603n;
+  for (let index = 0; index < seed.length; index += 1) {
+    value ^= BigInt(seed.charCodeAt(index));
+    value *= 1099511628211n;
+  }
+
+  return value;
+}
+
+function greatestCommonDivisor(left, right) {
+  let a = left < 0n ? -left : left;
+  let b = right < 0n ? -right : right;
+
+  while (b !== 0n) {
+    const next = a % b;
+    a = b;
+    b = next;
+  }
+
+  return a;
+}
+
+function getSequenceIndex(profile, sampleId, generationIndex) {
+  const capacity = getSequenceCapacity(profile);
+  const seed = `${sampleId}-${profile.id}-${profile.length}`;
+  const offset = hashBigInt(`${seed}-offset`) % capacity;
+  let stride = (hashBigInt(`${seed}-stride`) % capacity) || 1n;
+
+  while (greatestCommonDivisor(stride, capacity) !== 1n) {
+    stride = (stride + 1n) % capacity || 1n;
+  }
+
+  return (offset + BigInt(generationIndex) * stride) % capacity;
+}
+
+function buildSequence(profile, sampleId, generationIndex) {
+  const alphabet = uniqueAlphabet(profile);
+  const bodyLength = variableBodyLength(profile);
+  let index = getSequenceIndex(profile, sampleId, generationIndex);
   const body = Array.from({ length: bodyLength }, () => {
-    const pick = Math.floor(random() * profile.alphabet.length);
-    return profile.alphabet[pick];
+    const baseIndex = Number(index % BigInt(alphabet.length));
+    index /= BigInt(alphabet.length);
+    return alphabet[baseIndex];
   }).join("");
 
   return `${profile.motif}${body}${profile.ending}`;
@@ -89,8 +135,9 @@ function gcPercent(sequence) {
   return Math.round((gcCount / sequence.length) * 1000) / 10;
 }
 
-export function generateSequence(profile, sample) {
-  const sequence = buildSequence(profile, sample.id);
+export function generateSequence(profile, sample, generationIndex = 0) {
+  const sequence = buildSequence(profile, sample.id, generationIndex);
+  const usedCount = generationIndex + 1;
   return {
     id: profile.id,
     title: profile.title,
@@ -101,13 +148,46 @@ export function generateSequence(profile, sample) {
     sequence,
     bases: sequence.length,
     gc: gcPercent(sequence),
+    usedCount,
+    possibleCount: formatSequenceCount(getSequenceCapacity(profile)),
     splice: `${profile.motif} + synthetic body + ${profile.ending}`
   };
 }
 
-export function generateBatch(sample) {
-  return Object.fromEntries(
-    sequenceProfiles.map((profile) => [profile.id, generateSequence(profile, sample)])
+export function generateNextSequence(profile, sample, usedCount = 0) {
+  if (BigInt(usedCount) >= getSequenceCapacity(profile)) {
+    return {
+      exhausted: true,
+      sequence: null,
+      nextUsedCount: usedCount
+    };
+  }
+
+  return {
+    exhausted: false,
+    sequence: generateSequence(profile, sample, usedCount),
+    nextUsedCount: usedCount + 1
+  };
+}
+
+export function generateBatch(sample, usedCounts = {}) {
+  return sequenceProfiles.reduce(
+    (batch, profile) => {
+      const result = generateNextSequence(profile, sample, usedCounts[profile.id] || 0);
+      batch.exhausted[profile.id] = result.exhausted;
+      batch.usedCounts[profile.id] = result.nextUsedCount;
+
+      if (result.sequence) {
+        batch.sequences[profile.id] = result.sequence;
+      }
+
+      return batch;
+    },
+    {
+      exhausted: {},
+      sequences: {},
+      usedCounts: { ...usedCounts }
+    }
   );
 }
 

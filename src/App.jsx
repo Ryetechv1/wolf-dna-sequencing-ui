@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -27,7 +27,14 @@ import {
 } from "lucide-react";
 import { GenomeTracks, Histogram, LineagePlot, Sparkline } from "./charts.jsx";
 import { pipelineSteps, samples, variants } from "./data.js";
-import { formatInjectionBlock, generateBatch, generateSequence, getSequenceProfiles } from "./sequenceGenerators.js";
+import {
+  formatInjectionBlock,
+  formatSequenceCount,
+  generateBatch,
+  generateNextSequence,
+  getSequenceCapacity,
+  getSequenceProfiles
+} from "./sequenceGenerators.js";
 
 const assetPath = (path) => `${import.meta.env.BASE_URL}${path}`;
 
@@ -283,22 +290,28 @@ function Workspace({ selectedSample }) {
   );
 }
 
-function SequenceHudCard({ profile, generated, onGenerate }) {
+function SequenceHudCard({ profile, generated, usedCount, possibleCount, exhausted, onGenerate }) {
+  const displayUsed = formatSequenceCount(usedCount);
+
   return (
-    <article className={`sequence-card ${profile.accent}`}>
+    <article className={`sequence-card ${profile.accent} ${exhausted ? "exhausted" : ""}`}>
       <div className="sequence-card-head">
         <Dna size={16} />
         <span>{profile.title}</span>
         {generated ? <CheckCircle2 size={15} /> : null}
       </div>
       <code>{generated ? generated.sequence.slice(0, 34) : "Awaiting splice generation"}</code>
+      <small className="sequence-pool">
+        {exhausted ? "Sequence space exhausted" : `${displayUsed}/${possibleCount} used`}
+      </small>
       <dl>
         <div><dt>Bases</dt><dd>{generated ? generated.bases : profile.length}</dd></div>
         <div><dt>GC</dt><dd>{generated ? `${generated.gc}%` : "--"}</dd></div>
+        <div><dt>Run</dt><dd>{generated ? `#${formatSequenceCount(generated.usedCount)}` : "--"}</dd></div>
       </dl>
-      <button type="button" onClick={() => onGenerate(profile)}>
+      <button type="button" disabled={exhausted} onClick={() => onGenerate(profile)}>
         <Play size={14} />
-        {profile.action}
+        {exhausted ? "Pool Exhausted" : generated ? "Generate Next" : profile.action}
       </button>
     </article>
   );
@@ -308,13 +321,31 @@ function AffirmationBatchPanel({ selectedSample }) {
   const [fileName, setFileName] = useState("");
   const [affirmationText, setAffirmationText] = useState("");
   const [sequences, setSequences] = useState({});
+  const [usedCounts, setUsedCounts] = useState({});
+  const [exhausted, setExhausted] = useState({});
   const [injected, setInjected] = useState(false);
   const [exported, setExported] = useState(false);
   const profiles = getSequenceProfiles();
+  const possibleCounts = useMemo(
+    () => Object.fromEntries(
+      profiles.map((profile) => [profile.id, formatSequenceCount(getSequenceCapacity(profile))])
+    ),
+    [profiles]
+  );
 
   const hasFile = Boolean(fileName);
   const allGenerated = profiles.every((profile) => sequences[profile.id]);
+  const allExhausted = profiles.every((profile) => exhausted[profile.id]);
+  const uniqueUsedCount = Object.values(usedCounts).reduce((total, count) => total + count, 0);
   const lineCount = affirmationText ? affirmationText.split(/\r\n|\r|\n/).length : 0;
+
+  useEffect(() => {
+    setSequences({});
+    setUsedCounts({});
+    setExhausted({});
+    setInjected(false);
+    setExported(false);
+  }, [selectedSample.id]);
 
   const handleImport = async (event) => {
     const [file] = event.target.files;
@@ -328,18 +359,41 @@ function AffirmationBatchPanel({ selectedSample }) {
   };
 
   const handleGenerateOne = (profile) => {
+    const result = generateNextSequence(profile, selectedSample, usedCounts[profile.id] || 0);
+
+    setExhausted((current) => ({
+      ...current,
+      [profile.id]: result.exhausted
+    }));
+
+    if (!result.sequence) return;
+
     setSequences((current) => ({
       ...current,
-      [profile.id]: generateSequence(profile, selectedSample)
+      [profile.id]: result.sequence
+    }));
+    setUsedCounts((current) => ({
+      ...current,
+      [profile.id]: result.nextUsedCount
     }));
     setInjected(false);
     setExported(false);
   };
 
   const handleGenerateBatch = () => {
-    setSequences(generateBatch(selectedSample));
-    setInjected(false);
-    setExported(false);
+    const batch = generateBatch(selectedSample, usedCounts);
+
+    setSequences((current) => ({
+      ...current,
+      ...batch.sequences
+    }));
+    setUsedCounts(batch.usedCounts);
+    setExhausted(batch.exhausted);
+
+    if (Object.keys(batch.sequences).length > 0) {
+      setInjected(false);
+      setExported(false);
+    }
   };
 
   const handleBatchInject = () => {
@@ -379,7 +433,7 @@ function AffirmationBatchPanel({ selectedSample }) {
             Import affirmation.txt
             <input type="file" accept=".txt,text/plain" onChange={handleImport} />
           </label>
-          <button className="command-button primary" type="button" onClick={handleGenerateBatch}>
+          <button className="command-button primary" type="button" disabled={allExhausted} onClick={handleGenerateBatch}>
             <Layers size={16} />
             Generate Batch
           </button>
@@ -397,6 +451,7 @@ function AffirmationBatchPanel({ selectedSample }) {
         <span className={hasFile ? "ready" : ""}>{hasFile ? fileName : "No file imported"}</span>
         <span>{lineCount} lines loaded</span>
         <span>{Object.keys(sequences).length}/5 generated</span>
+        <span>{formatSequenceCount(uniqueUsedCount)} unique strings used</span>
         <span className={injected ? "ready" : ""}>{injected ? "Batch injected" : "Pending injection"}</span>
         <span className={exported ? "ready" : ""}>{exported ? "Export launched" : "Export pending"}</span>
       </div>
@@ -406,6 +461,9 @@ function AffirmationBatchPanel({ selectedSample }) {
             key={profile.id}
             profile={profile}
             generated={sequences[profile.id]}
+            usedCount={usedCounts[profile.id] || 0}
+            possibleCount={possibleCounts[profile.id]}
+            exhausted={Boolean(exhausted[profile.id])}
             onGenerate={handleGenerateOne}
           />
         ))}
