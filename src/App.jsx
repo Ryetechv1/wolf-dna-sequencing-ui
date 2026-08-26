@@ -22,7 +22,9 @@ import {
   RotateCw,
   Search,
   Settings,
+  Square,
   Upload,
+  Volume2,
   X
 } from "lucide-react";
 import { GenomeTracks, Histogram, LineagePlot, Sparkline } from "./charts.jsx";
@@ -37,6 +39,16 @@ import {
   getSequenceProfiles,
   getTargetStructures
 } from "./sequenceGenerators.js";
+import {
+  buildSrt,
+  buildSsml,
+  buildTtsScript,
+  getDefaultTtsProfile,
+  getDefaultTtsReadMode,
+  getTtsProfiles,
+  getTtsReadModes,
+  getTtsStats
+} from "./ttsExport.js";
 
 const assetPath = (path) => `${import.meta.env.BASE_URL}${path}`;
 
@@ -73,6 +85,27 @@ const createInitialBatchStates = () => ({
   human: createEmptyBatchState(getDefaultTargetStructure("human").id),
   wolf: createEmptyBatchState(getDefaultTargetStructure("wolf").id)
 });
+
+function getExportFileName(fileName, suffix, extension) {
+  const stem = (fileName || "affirmation")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^a-z0-9-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase() || "affirmation";
+  return `${stem}-${suffix}.${extension}`;
+}
+
+function downloadTextFile(content, fileName, type = "text/plain;charset=utf-8") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 
 function StatusPill({ status }) {
   return <span className={`status-pill ${status.toLowerCase()}`}>{status}</span>;
@@ -462,7 +495,24 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   const [affirmationText, setAffirmationText] = useState("");
   const [batchStates, setBatchStates] = useState(createInitialBatchStates);
   const [exported, setExported] = useState(false);
+  const [ttsProfileId, setTtsProfileId] = useState(getDefaultTtsProfile().id);
+  const [ttsReadMode, setTtsReadMode] = useState(getDefaultTtsReadMode().id);
+  const [ttsVoiceUri, setTtsVoiceUri] = useState("");
+  const [ttsVoices, setTtsVoices] = useState([]);
+  const [ttsPreviewing, setTtsPreviewing] = useState(false);
   const profiles = getSequenceProfiles();
+  const ttsProfiles = getTtsProfiles();
+  const ttsReadModes = getTtsReadModes();
+  const ttsProfile = ttsProfiles.find((profile) => profile.id === ttsProfileId) || getDefaultTtsProfile();
+  const ttsScript = useMemo(
+    () => affirmationText ? buildTtsScript(affirmationText, ttsReadMode) : "",
+    [affirmationText, ttsReadMode]
+  );
+  const ttsStats = useMemo(() => getTtsStats(ttsScript), [ttsScript]);
+  const ttsEstimatedMinutes = ttsStats.estimatedSeconds ? Math.max(1, Math.ceil(ttsStats.estimatedSeconds / 60)) : 0;
+  const supportsTtsPreview = typeof window !== "undefined"
+    && "speechSynthesis" in window
+    && "SpeechSynthesisUtterance" in window;
   const targetOptions = useMemo(
     () => ({
       human: getTargetStructures("human"),
@@ -521,6 +571,33 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
     }));
     setExported(false);
   }, [selectedSample.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return undefined;
+    }
+
+    const synth = window.speechSynthesis;
+    const refreshVoices = () => {
+      setTtsVoices(synth.getVoices().filter((voice) => voice.lang.toLowerCase().startsWith("en")));
+    };
+
+    refreshVoices();
+    if (synth.addEventListener) {
+      synth.addEventListener("voiceschanged", refreshVoices);
+    } else {
+      synth.onvoiceschanged = refreshVoices;
+    }
+
+    return () => {
+      synth.cancel();
+      if (synth.removeEventListener) {
+        synth.removeEventListener("voiceschanged", refreshVoices);
+      } else if (synth.onvoiceschanged === refreshVoices) {
+        synth.onvoiceschanged = null;
+      }
+    };
+  }, []);
 
   const handleImport = async (event) => {
     const [file] = event.target.files;
@@ -641,16 +718,62 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   const handleExport = () => {
     if (!affirmationText) return;
 
-    const blob = new Blob([affirmationText], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = fileName || "affirmation.txt";
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    downloadTextFile(affirmationText, fileName || "affirmation.txt");
     setExported(true);
+  };
+
+  const handlePreviewTts = () => {
+    if (!ttsScript || !supportsTtsPreview) return;
+
+    const synth = window.speechSynthesis;
+    const utterance = new window.SpeechSynthesisUtterance(ttsScript.slice(0, 5000));
+    const selectedVoice = ttsVoices.find((voice) => voice.voiceURI === ttsVoiceUri);
+    synth.cancel();
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+      utterance.lang = selectedVoice.lang;
+    } else {
+      utterance.lang = "en-US";
+    }
+    utterance.pitch = ttsProfile.previewPitch;
+    utterance.rate = ttsProfile.previewRate;
+    utterance.onend = () => setTtsPreviewing(false);
+    utterance.onerror = () => setTtsPreviewing(false);
+    setTtsPreviewing(true);
+    synth.speak(utterance);
+  };
+
+  const handleStopTts = () => {
+    if (supportsTtsPreview) {
+      window.speechSynthesis.cancel();
+    }
+    setTtsPreviewing(false);
+  };
+
+  const handleExportTtsScript = () => {
+    if (!ttsScript) return;
+
+    downloadTextFile(ttsScript, getExportFileName(fileName, "tts-script", "txt"));
+  };
+
+  const handleExportTtsSsml = () => {
+    if (!ttsScript) return;
+
+    downloadTextFile(
+      buildSsml(ttsScript, ttsProfile),
+      getExportFileName(fileName, "hq-tts", "ssml"),
+      "application/ssml+xml;charset=utf-8"
+    );
+  };
+
+  const handleExportTtsSrt = () => {
+    if (!ttsScript) return;
+
+    downloadTextFile(
+      buildSrt(ttsScript),
+      getExportFileName(fileName, "tts-captions", "srt"),
+      "application/x-subrip;charset=utf-8"
+    );
   };
 
   return (
@@ -678,6 +801,60 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
         <span>{formatSequenceCount(totalUniqueUsed)} unique strings used</span>
         <span>{targets.filter((target) => batchStates[target.key].injected).length}/2 batches injected</span>
         <span className={exported ? "ready" : ""}>{exported ? "Export launched" : "Export pending"}</span>
+      </div>
+      <div className="tts-panel" aria-label="High quality TTS export">
+        <div className="tts-panel-head">
+          <div>
+            <h3>HQ TTS Export</h3>
+            <p>{ttsStats.words} words · {ttsEstimatedMinutes} min est. · {ttsStats.characters} chars</p>
+          </div>
+          <span className={ttsScript ? "status-pill passed" : "status-pill flagged"}>{ttsScript ? "Ready" : "Idle"}</span>
+        </div>
+        <div className="tts-controls">
+          <label>
+            <span>Style</span>
+            <select value={ttsProfileId} onChange={(event) => setTtsProfileId(event.target.value)} aria-label="TTS voice style">
+              {ttsProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>{profile.label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Read mode</span>
+            <select value={ttsReadMode} onChange={(event) => setTtsReadMode(event.target.value)} aria-label="TTS read mode">
+              {ttsReadModes.map((mode) => (
+                <option key={mode.id} value={mode.id}>{mode.label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Voice</span>
+            <select value={ttsVoiceUri} onChange={(event) => setTtsVoiceUri(event.target.value)} disabled={!supportsTtsPreview} aria-label="TTS preview voice">
+              <option value="">System default</option>
+              {ttsVoices.map((voice) => (
+                <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="tts-actions">
+          <button className="command-button" type="button" disabled={!ttsScript || !supportsTtsPreview} onClick={ttsPreviewing ? handleStopTts : handlePreviewTts}>
+            {ttsPreviewing ? <Square size={15} /> : <Volume2 size={16} />}
+            {ttsPreviewing ? "Stop TTS" : "Preview TTS"}
+          </button>
+          <button className="command-button" type="button" disabled={!ttsScript} onClick={handleExportTtsScript}>
+            <FileText size={16} />
+            Export Script
+          </button>
+          <button className="command-button primary" type="button" disabled={!ttsScript} onClick={handleExportTtsSsml}>
+            <FileDown size={16} />
+            Export HQ SSML
+          </button>
+          <button className="command-button" type="button" disabled={!ttsScript} onClick={handleExportTtsSrt}>
+            <Download size={16} />
+            Export SRT
+          </button>
+        </div>
       </div>
       <div className="splice-lanes">
         {targets.map((target) => (
