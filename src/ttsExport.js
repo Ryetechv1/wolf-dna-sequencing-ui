@@ -104,17 +104,6 @@ const readModes = [
   { id: "full", label: "Full File" }
 ];
 
-const audioVoiceOptions = [
-  { id: "atlas", label: "Atlas", variant: "m3", pitchOffset: -4, speedOffset: -4, amplitude: 100 },
-  { id: "sentinel", label: "Sentinel", variant: "m4", pitchOffset: -10, speedOffset: -8, amplitude: 105 },
-  { id: "ranger", label: "Ranger", variant: "m5", pitchOffset: -2, speedOffset: 8, amplitude: 102 },
-  { id: "nova", label: "Nova", variant: "f2", pitchOffset: 6, speedOffset: 0, amplitude: 96 },
-  { id: "crystal", label: "Crystal", variant: "f5", pitchOffset: 10, speedOffset: 2, amplitude: 94 },
-  { id: "oracle", label: "Oracle", variant: "f4", pitchOffset: 3, speedOffset: -18, amplitude: 98 },
-  { id: "whisper", label: "Whisper", variant: "whisper", pitchOffset: -6, speedOffset: -12, amplitude: 115 },
-  { id: "soft-whisper", label: "Soft Whisper", variant: "whisperf", pitchOffset: 4, speedOffset: -16, amplitude: 108 }
-];
-
 const blockPattern = /=== LupineSeq Batch Splice Injection ===([\s\S]*?)=== End LupineSeq Batch Splice Injection ===/g;
 const sequencePattern = /^>LupineSeq_(\w+)_synthetic_(\w+)_(\S+)([^\n]*)\n([AUGCT]+)/gm;
 
@@ -132,14 +121,6 @@ export function getDefaultTtsProfile() {
 
 export function getDefaultTtsReadMode() {
   return readModes[0];
-}
-
-export function getAudioVoiceOptions() {
-  return audioVoiceOptions;
-}
-
-export function getDefaultAudioVoice() {
-  return audioVoiceOptions[0];
 }
 
 function parseMetadata(header) {

@@ -44,8 +44,6 @@ import {
   buildSrt,
   buildSsml,
   buildTtsScript,
-  getAudioVoiceOptions,
-  getDefaultAudioVoice,
   getDefaultTtsProfile,
   getDefaultTtsReadMode,
   getTtsProfiles,
@@ -506,15 +504,12 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   const [ttsVoiceUri, setTtsVoiceUri] = useState("");
   const [ttsVoices, setTtsVoices] = useState([]);
   const [ttsPreviewing, setTtsPreviewing] = useState(false);
-  const [ttsAudioVoiceId, setTtsAudioVoiceId] = useState(getDefaultAudioVoice().id);
   const [ttsAudioRendering, setTtsAudioRendering] = useState("");
   const [ttsAudioStatus, setTtsAudioStatus] = useState("");
   const profiles = getSequenceProfiles();
   const ttsProfiles = getTtsProfiles();
   const ttsReadModes = getTtsReadModes();
-  const ttsAudioVoices = getAudioVoiceOptions();
   const ttsProfile = ttsProfiles.find((profile) => profile.id === ttsProfileId) || getDefaultTtsProfile();
-  const ttsAudioVoice = ttsAudioVoices.find((voice) => voice.id === ttsAudioVoiceId) || getDefaultAudioVoice();
   const affirmationExportText = useMemo(
     () => affirmationText ? buildAffirmationList(affirmationText) : "",
     [affirmationText]
@@ -800,7 +795,7 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
 
     try {
       const { createTtsAudioBlob } = await import("./audioExport.js");
-      const { blob, extension } = await createTtsAudioBlob(ttsScript, ttsProfile, ttsAudioVoice, format);
+      const { blob, extension } = await createTtsAudioBlob(ttsScript, ttsProfile, format);
       downloadBlob(blob, getExportFileName(fileName, "tts-audio", extension));
       setTtsAudioStatus(`${label} export ready`);
     } catch (error) {
@@ -841,7 +836,7 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
         <div className="tts-panel-head">
           <div>
             <h3>HQ TTS Export</h3>
-            <p>{ttsStats.words} words · {ttsEstimatedMinutes} min est. · {ttsStats.characters} chars · {ttsAudioStatus || `${ttsAudioVoice.label} audio`}</p>
+            <p>{ttsStats.words} words · {ttsEstimatedMinutes} min est. · {ttsStats.characters} chars · {ttsAudioStatus || "Audio export ready"}</p>
           </div>
           <span className={ttsScript ? "status-pill passed" : "status-pill flagged"}>{ttsAudioRendering ? "Rendering" : ttsScript ? "Ready" : "Idle"}</span>
         </div>
@@ -868,14 +863,6 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
               <option value="">System default</option>
               {ttsVoices.map((voice) => (
                 <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Export voice</span>
-            <select value={ttsAudioVoiceId} onChange={(event) => setTtsAudioVoiceId(event.target.value)} aria-label="TTS audio export voice">
-              {ttsAudioVoices.map((voice) => (
-                <option key={voice.id} value={voice.id}>{voice.label}</option>
               ))}
             </select>
           </label>

@@ -2,6 +2,11 @@ import meSpeakConfig from "mespeak/src/mespeak_config.json";
 import enUsVoice from "mespeak/voices/en/en-us.json";
 
 let meSpeakPromise;
+const audioPreset = {
+  amplitude: 98,
+  pitchOffset: 0,
+  speedOffset: 0
+};
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -32,7 +37,7 @@ function sanitizeSpeechText(script) {
     .trim();
 }
 
-function splitSpeechSegments(script, maxLength = 850) {
+function splitSpeechSegments(script, maxLength = 1400) {
   const parts = sanitizeSpeechText(script)
     .split(/(?<=[.!?])\s+|\n{2,}/)
     .map((part) => part.trim())
@@ -189,22 +194,21 @@ function writeWav(samples, sampleRate) {
   return new Uint8Array(buffer);
 }
 
-function getSpeechOptions(profile, voiceOption) {
+function getSpeechOptions(profile) {
   return {
-    amplitude: voiceOption.amplitude || 100,
-    pitch: clamp((profile.audioPitch || 50) + (voiceOption.pitchOffset || 0), 0, 99),
+    amplitude: audioPreset.amplitude,
+    pitch: clamp((profile.audioPitch || 50) + audioPreset.pitchOffset, 0, 99),
     rawdata: "array",
-    speed: clamp((profile.audioSpeed || 154) + (voiceOption.speedOffset || 0), 80, 320),
-    variant: voiceOption.variant,
+    speed: clamp((profile.audioSpeed || 154) + audioPreset.speedOffset, 80, 320),
     voice: "en/en-us",
-    wordgap: Math.max(0, (profile.audioWordGap || 0) + (voiceOption.wordGapOffset || 0))
+    wordgap: Math.min(2, Math.max(0, profile.audioWordGap || 0))
   };
 }
 
-async function renderPcm(script, profile, voiceOption) {
+async function renderPcm(script, profile) {
   const meSpeak = await loadMeSpeak();
-  const options = getSpeechOptions(profile, voiceOption);
-  const silenceMs = profile.breakMs || 320;
+  const options = getSpeechOptions(profile);
+  const silenceMs = Math.min(profile.breakMs || 240, 160);
   const chunks = [];
   let sampleRate = 0;
 
@@ -255,8 +259,8 @@ async function encodeMp3(samples, sampleRate) {
   return new Blob(frames, { type: "audio/mpeg" });
 }
 
-export async function createTtsAudioBlob(script, profile, voiceOption, format = "wav") {
-  const { sampleRate, samples } = await renderPcm(script, profile, voiceOption);
+export async function createTtsAudioBlob(script, profile, format = "wav") {
+  const { sampleRate, samples } = await renderPcm(script, profile);
 
   if (format === "mp3") {
     return {
