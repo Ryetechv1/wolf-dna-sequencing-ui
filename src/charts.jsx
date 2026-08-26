@@ -54,7 +54,36 @@ export function Histogram() {
   );
 }
 
-export function LineagePlot({ selectedSample }) {
+function hashText(text) {
+  let value = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    value = (value * 31 + text.charCodeAt(index)) % 9973;
+  }
+
+  return value;
+}
+
+function normalizedLineage(sample) {
+  if (sample.lineage === "Canis lupus") return "Northern";
+  return sample.lineage;
+}
+
+function samplePlacement(selectedSample) {
+  const lineage = normalizedLineage(selectedSample);
+  const cluster = lineageClusters.find((item) => item.label === lineage) || lineageClusters[1];
+  const point = cluster.points[hashText(selectedSample.id) % cluster.points.length];
+  const drift = (hashText(`${selectedSample.id}-${selectedSample.labId || ""}`) % 7) - 3;
+
+  return {
+    label: lineage,
+    x: 38 + (point[0] + drift) * 2.28,
+    y: 202 - (point[1] - drift) * 1.72
+  };
+}
+
+export function LineagePlot({ selectedSample, focus = "selected" }) {
+  const placement = samplePlacement(selectedSample);
+
   return (
     <div className="lineage-content">
       <svg className="lineage-plot" viewBox="0 0 340 240" role="img" aria-label="Lineage placement scatter plot">
@@ -72,21 +101,24 @@ export function LineagePlot({ selectedSample }) {
         <text x="300" y="212" fill="#9eafb8" fontSize="12">PC1</text>
         <text x="22" y="24" fill="#9eafb8" fontSize="12" transform="rotate(-90 22 24)">PC2</text>
         {lineageClusters.map((cluster) =>
-          cluster.points.map(([x, y], pointIndex) => (
-            <circle
-              key={`${cluster.label}-${pointIndex}`}
-              cx={38 + x * 2.28}
-              cy={202 - y * 1.72}
-              r={cluster.label === "Other Canids" ? 3.2 : 4}
-              fill={cluster.color}
-              opacity={cluster.label === selectedSample.lineage || selectedSample.lineage === "Canis lupus" ? 0.92 : 0.48}
-              filter="url(#lineageGlow)"
-            />
-          ))
+          cluster.points.map(([x, y], pointIndex) => {
+            const focused = focus === "all" || cluster.label === focus || (focus === "selected" && cluster.label === placement.label);
+            return (
+              <circle
+                key={`${cluster.label}-${pointIndex}`}
+                cx={38 + x * 2.28}
+                cy={202 - y * 1.72}
+                r={cluster.label === "Other Canids" ? 3.2 : 4}
+                fill={cluster.color}
+                opacity={focused ? 0.92 : 0.22}
+                filter="url(#lineageGlow)"
+              />
+            );
+          })
         )}
-        <circle cx="192" cy="84" r="9" fill="none" stroke="#f8fbfd" strokeWidth="2" />
-        <circle cx="192" cy="84" r="3.5" fill="#f8fbfd" />
-        <text x="208" y="88" fill="#eef7fa" fontSize="12">{selectedSample.id}</text>
+        <circle cx={placement.x} cy={placement.y} r="9" fill="none" stroke="#f8fbfd" strokeWidth="2" />
+        <circle cx={placement.x} cy={placement.y} r="3.5" fill="#f8fbfd" />
+        <text x={placement.x + 16} y={placement.y + 4} fill="#eef7fa" fontSize="12">{selectedSample.id}</text>
       </svg>
       <div className="legend-list" aria-label="Lineage legend">
         {lineageClusters.map((cluster) => (
@@ -100,18 +132,39 @@ export function LineagePlot({ selectedSample }) {
   );
 }
 
-export function GenomeTracks() {
-  const coverage = Array.from({ length: 116 }, (_, index) => {
-    const wave = Math.sin(index / 8) * 8 + Math.cos(index / 15) * 5;
-    return Math.max(12, Math.round(25 + wave + ((index * 11) % 9)));
+const genomeReferenceConfig = {
+  compare: { chromosomeCount: 38, coverageBias: 4, densityBias: 10 },
+  human: { chromosomeCount: 24, coverageBias: 7, densityBias: 6 },
+  wolf: { chromosomeCount: 38, coverageBias: 0, densityBias: 0 }
+};
+
+const genomeScopeConfig = {
+  autosomes: { chromosomeCount: 12, coveragePoints: 80, label: "Autosomes 1-12" },
+  hotspots: { chromosomeCount: 16, coveragePoints: 94, label: "Variant Hotspots" },
+  mtdna: { chromosomeCount: 1, coveragePoints: 56, label: "Mitochondrial Track" },
+  whole: { chromosomeCount: null, coveragePoints: 116, label: "Whole Genome" }
+};
+
+export function GenomeTracks({ reference = "wolf", scope = "whole" }) {
+  const referenceConfig = genomeReferenceConfig[reference] || genomeReferenceConfig.wolf;
+  const scopeConfig = genomeScopeConfig[scope] || genomeScopeConfig.whole;
+  const chromosomeCount = scopeConfig.chromosomeCount || referenceConfig.chromosomeCount;
+  const coverage = Array.from({ length: scopeConfig.coveragePoints }, (_, index) => {
+    const wave = Math.sin((index + referenceConfig.coverageBias) / 8) * 8 + Math.cos(index / 15) * 5;
+    return Math.max(12, Math.round(25 + referenceConfig.coverageBias + wave + ((index * 11) % 9)));
   });
+  const variantCount = scope === "mtdna" ? 36 : scope === "hotspots" ? 118 : 94;
 
   return (
     <div className="genome-chart" aria-label="Genome overview chart">
+      <div className="genome-meta">
+        <span>{scopeConfig.label}</span>
+        <span>{chromosomeCount === 1 ? "chrM" : `${chromosomeCount} chromosomes shown`}</span>
+      </div>
       <div className="chromosomes">
-        {Array.from({ length: 38 }, (_, index) => (
+        {Array.from({ length: chromosomeCount }, (_, index) => (
           <span key={index}>
-            <b>{index + 1}</b>
+            <b>{chromosomeCount === 1 ? "M" : index + 1}</b>
             <i />
           </span>
         ))}
@@ -126,23 +179,23 @@ export function GenomeTracks() {
         {coverage.map((height, index) => (
           <rect
             key={`coverage-${index}`}
-            x={index * 6.2}
+            x={(index / coverage.length) * 714}
             y={64 - height}
-            width="4.6"
+            width={Math.max(2.4, 620 / coverage.length)}
             height={height}
             rx="1.4"
             fill="rgba(38, 199, 211, 0.58)"
           />
         ))}
-        {Array.from({ length: 94 }, (_, index) => {
-          const height = 16 + ((index * 17) % 36);
-          const flagged = index % 17 === 0 || index % 31 === 0;
+        {Array.from({ length: variantCount }, (_, index) => {
+          const height = 16 + ((index * (17 + referenceConfig.densityBias)) % 36);
+          const flagged = index % 17 === 0 || index % (31 - Math.min(12, referenceConfig.densityBias)) === 0;
           return (
             <rect
               key={`variant-${index}`}
-              x={index * 7.55}
+              x={(index / variantCount) * 710}
               y={90 - height}
-              width="3.6"
+              width={Math.max(2.2, 480 / variantCount)}
               height={height}
               rx="1.1"
               fill={flagged ? "#f3b84b" : "#2fe4c7"}

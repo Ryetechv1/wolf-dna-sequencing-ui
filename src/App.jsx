@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -26,7 +26,7 @@ import {
   X
 } from "lucide-react";
 import { GenomeTracks, Histogram, LineagePlot, Sparkline } from "./charts.jsx";
-import { pipelineSteps, samples, variants } from "./data.js";
+import { lineageClusters, pipelineSteps, samples, variants } from "./data.js";
 import {
   formatInjectionBlock,
   formatSequenceCount,
@@ -45,6 +45,26 @@ const navItems = [
   { label: "Variants", icon: Dna },
   { label: "Reports", icon: FileText }
 ];
+
+const genomeReferences = [
+  { value: "wolf", label: "Canis lupus ref" },
+  { value: "human", label: "Human GRCh38 ref" },
+  { value: "compare", label: "Wolf/Human compare" }
+];
+
+const genomeScopes = [
+  { value: "whole", label: "Whole Genome" },
+  { value: "autosomes", label: "Autosomes 1-12" },
+  { value: "mtdna", label: "mtDNA" },
+  { value: "hotspots", label: "Variant Hotspots" }
+];
+
+const createEmptyBatchState = () => ({
+  exhausted: {},
+  injected: false,
+  sequences: {},
+  usedCounts: {}
+});
 
 function StatusPill({ status }) {
   return <span className={`status-pill ${status.toLowerCase()}`}>{status}</span>;
@@ -182,22 +202,32 @@ function SegmentControl({ value, onChange }) {
   );
 }
 
-function SamplesPanel({ selectedSample, onSelectSample, sampleFilter, onFilterChange }) {
+function SamplesPanel({ selectedSample, onSelectSample, sampleFilter, onFilterChange, panelRef }) {
+  const [query, setQuery] = useState("");
   const visibleSamples = useMemo(() => {
-    if (sampleFilter === "All") return samples;
-    return samples.filter((sample) => sample.status === sampleFilter);
-  }, [sampleFilter]);
+    const normalizedQuery = query.trim().toLowerCase();
+    return samples.filter((sample) => {
+      const matchesStatus = sampleFilter === "All" || sample.status === sampleFilter;
+      const searchable = `${sample.id} ${sample.species} ${sample.latin} ${sample.lineage} ${sample.location} ${sample.labId}`.toLowerCase();
+      return matchesStatus && (!normalizedQuery || searchable.includes(normalizedQuery));
+    });
+  }, [query, sampleFilter]);
 
   return (
-    <section className="samples-panel" aria-label="Samples">
+    <section className="samples-panel" aria-label="Samples" ref={panelRef}>
       <div className="panel-heading">
-        <h2>Samples ({samples.length})</h2>
+        <h2>Samples ({visibleSamples.length}/{samples.length})</h2>
       </div>
       <SegmentControl value={sampleFilter} onChange={onFilterChange} />
-      <label className="search-field">
+      <div className={query ? "search-field has-clear" : "search-field"}>
         <Search size={17} />
-        <input type="search" placeholder="Search samples..." aria-label="Search samples" />
-      </label>
+        <input value={query} onChange={(event) => setQuery(event.target.value)} type="search" placeholder="Search samples..." aria-label="Search samples" />
+        {query ? (
+          <button type="button" aria-label="Clear sample search" onClick={() => setQuery("")}>
+            <X size={14} />
+          </button>
+        ) : null}
+      </div>
       <div className="sample-list">
         {visibleSamples.map((sample) => (
           <button
@@ -222,6 +252,9 @@ function SamplesPanel({ selectedSample, onSelectSample, sampleFilter, onFilterCh
             {sample.status === "Flagged" ? <AlertTriangle size={18} className="warn-icon" /> : <Activity size={17} className="ok-icon" />}
           </button>
         ))}
+        {visibleSamples.length === 0 ? (
+          <div className="empty-samples">No samples match the current filter.</div>
+        ) : null}
       </div>
     </section>
   );
@@ -238,9 +271,21 @@ function QcCard({ label, value, note, children }) {
   );
 }
 
-function Workspace({ selectedSample }) {
+function Workspace({ selectedSample, overviewRef, lineageRef }) {
+  const [genomeReference, setGenomeReference] = useState("wolf");
+  const [genomeScope, setGenomeScope] = useState("whole");
+  const [lineageFocus, setLineageFocus] = useState("selected");
+  const lineageOptions = useMemo(
+    () => [
+      { value: "selected", label: "Selected Lineage" },
+      { value: "all", label: "All Lineages" },
+      ...lineageClusters.map((cluster) => ({ value: cluster.label, label: cluster.label }))
+    ],
+    []
+  );
+
   return (
-    <main className="workspace">
+    <main className="workspace" ref={overviewRef}>
       <section className="qc-section" aria-label="QC summary">
         <div className="section-title">
           <h2>QC Summary - {selectedSample.id}</h2>
@@ -265,33 +310,47 @@ function Workspace({ selectedSample }) {
       </section>
 
       <div className="analysis-grid">
-        <section className="analysis-panel lineage-panel" aria-label="Lineage placement">
+        <section className="analysis-panel lineage-panel" aria-label="Lineage placement" ref={lineageRef}>
           <div className="section-title">
             <div>
               <h2>Lineage Placement</h2>
               <p>Reference: Canis lupus panel</p>
             </div>
+            <select value={lineageFocus} onChange={(event) => setLineageFocus(event.target.value)} aria-label="Lineage focus">
+              {lineageOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
           </div>
-          <LineagePlot selectedSample={selectedSample} />
+          <LineagePlot selectedSample={selectedSample} focus={lineageFocus} />
         </section>
 
         <section className="analysis-panel genome-panel" aria-label="Genome overview">
           <div className="section-title split">
             <h2>Genome Overview</h2>
             <div className="select-row">
-              <button type="button">Canis lupus ref <ChevronDown size={14} /></button>
-              <button type="button">Whole Genome <ChevronDown size={14} /></button>
+              <select value={genomeReference} onChange={(event) => setGenomeReference(event.target.value)} aria-label="Genome reference">
+                {genomeReferences.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <select value={genomeScope} onChange={(event) => setGenomeScope(event.target.value)} aria-label="Genome scope">
+                {genomeScopes.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
             </div>
           </div>
-          <GenomeTracks />
+          <GenomeTracks reference={genomeReference} scope={genomeScope} />
         </section>
       </div>
     </main>
   );
 }
 
-function SequenceHudCard({ profile, generated, usedCount, possibleCount, exhausted, onGenerate }) {
+function SequenceHudCard({ profile, generated, targetLabel, usedCount, possibleCount, exhausted, onGenerate }) {
   const displayUsed = formatSequenceCount(usedCount);
+  const nextLabel = generated ? "Generate Next" : profile.action;
 
   return (
     <article className={`sequence-card ${profile.accent} ${exhausted ? "exhausted" : ""}`}>
@@ -309,23 +368,101 @@ function SequenceHudCard({ profile, generated, usedCount, possibleCount, exhaust
         <div><dt>GC</dt><dd>{generated ? `${generated.gc}%` : "--"}</dd></div>
         <div><dt>Run</dt><dd>{generated ? `#${formatSequenceCount(generated.usedCount)}` : "--"}</dd></div>
       </dl>
-      <button type="button" disabled={exhausted} onClick={() => onGenerate(profile)}>
+      <button type="button" disabled={exhausted} aria-label={`${targetLabel} ${nextLabel} ${profile.title}`} onClick={() => onGenerate(profile)}>
         <Play size={14} />
-        {exhausted ? "Pool Exhausted" : generated ? "Generate Next" : profile.action}
+        {exhausted ? "Pool Exhausted" : nextLabel}
       </button>
     </article>
   );
 }
 
-function AffirmationBatchPanel({ selectedSample }) {
+function SpliceLane({
+  batch,
+  hasFile,
+  onGenerateBatch,
+  onGenerateOne,
+  onInject,
+  possibleCounts,
+  profiles,
+  target
+}) {
+  const allGenerated = profiles.every((profile) => batch.sequences[profile.id]);
+  const allExhausted = profiles.every((profile) => batch.exhausted[profile.id]);
+  const totalBases = Object.values(batch.sequences).reduce((sum, entry) => sum + entry.bases, 0);
+  const uniqueUsedCount = Object.values(batch.usedCounts).reduce((total, count) => total + count, 0);
+
+  return (
+    <div className={`splice-lane ${target.key}`}>
+      <div className="splice-lane-head">
+        <div>
+          <h3>{target.title}</h3>
+          <p>{target.sample.id} · {target.sample.latin}</p>
+        </div>
+        <StatusPill status={batch.injected ? "Passed" : target.sample.status} />
+      </div>
+      <div className="lane-actions">
+        <button className="command-button primary" type="button" disabled={allExhausted} onClick={() => onGenerateBatch(target.key)}>
+          <Layers size={16} />
+          Generate {target.shortLabel} Batch
+        </button>
+        <button className="command-button confirm" type="button" disabled={!hasFile || !allGenerated} onClick={() => onInject(target.key)}>
+          <CheckCircle2 size={16} />
+          Confirm {target.shortLabel} Inject
+        </button>
+      </div>
+      <div className="lane-status">
+        <span>{Object.keys(batch.sequences).length}/5 generated</span>
+        <span>{formatSequenceCount(uniqueUsedCount)} used</span>
+        <span>{totalBases ? `${totalBases} bases` : "No bases staged"}</span>
+      </div>
+      <div className="sequence-grid">
+        {profiles.map((profile) => (
+          <SequenceHudCard
+            key={`${target.key}-${profile.id}`}
+            profile={profile}
+            targetLabel={target.title}
+            generated={batch.sequences[profile.id]}
+            usedCount={batch.usedCounts[profile.id] || 0}
+            possibleCount={possibleCounts[profile.id]}
+            exhausted={Boolean(batch.exhausted[profile.id])}
+            onGenerate={(nextProfile) => onGenerateOne(target.key, nextProfile)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   const [fileName, setFileName] = useState("");
   const [affirmationText, setAffirmationText] = useState("");
-  const [sequences, setSequences] = useState({});
-  const [usedCounts, setUsedCounts] = useState({});
-  const [exhausted, setExhausted] = useState({});
-  const [injected, setInjected] = useState(false);
+  const [batchStates, setBatchStates] = useState({
+    human: createEmptyBatchState(),
+    wolf: createEmptyBatchState()
+  });
   const [exported, setExported] = useState(false);
   const profiles = getSequenceProfiles();
+  const targets = useMemo(
+    () => [
+      {
+        key: "wolf",
+        title: "Wolf Splicing",
+        shortLabel: "Wolf",
+        sample: selectedSample
+      },
+      {
+        key: "human",
+        title: "Human Splicing",
+        shortLabel: "Human",
+        sample: humanTarget
+      }
+    ],
+    [humanTarget, selectedSample]
+  );
+  const targetMap = useMemo(
+    () => Object.fromEntries(targets.map((target) => [target.key, target])),
+    [targets]
+  );
   const possibleCounts = useMemo(
     () => Object.fromEntries(
       profiles.map((profile) => [profile.id, formatSequenceCount(getSequenceCapacity(profile))])
@@ -334,16 +471,17 @@ function AffirmationBatchPanel({ selectedSample }) {
   );
 
   const hasFile = Boolean(fileName);
-  const allGenerated = profiles.every((profile) => sequences[profile.id]);
-  const allExhausted = profiles.every((profile) => exhausted[profile.id]);
-  const uniqueUsedCount = Object.values(usedCounts).reduce((total, count) => total + count, 0);
+  const totalUniqueUsed = Object.values(batchStates).reduce(
+    (sum, batch) => sum + Object.values(batch.usedCounts).reduce((total, count) => total + count, 0),
+    0
+  );
   const lineCount = affirmationText ? affirmationText.split(/\r\n|\r|\n/).length : 0;
 
   useEffect(() => {
-    setSequences({});
-    setUsedCounts({});
-    setExhausted({});
-    setInjected(false);
+    setBatchStates({
+      human: createEmptyBatchState(),
+      wolf: createEmptyBatchState()
+    });
     setExported(false);
   }, [selectedSample.id]);
 
@@ -354,54 +492,98 @@ function AffirmationBatchPanel({ selectedSample }) {
     const text = await file.text();
     setFileName(file.name || "affirmation.txt");
     setAffirmationText(text);
-    setInjected(false);
+    setBatchStates((current) => Object.fromEntries(
+      Object.entries(current).map(([key, batch]) => [key, { ...batch, injected: false }])
+    ));
     setExported(false);
   };
 
-  const handleGenerateOne = (profile) => {
-    const result = generateNextSequence(profile, selectedSample, usedCounts[profile.id] || 0);
+  const handleGenerateOne = (targetKey, profile) => {
+    setBatchStates((current) => {
+      const batch = current[targetKey] || createEmptyBatchState();
+      const result = generateNextSequence(profile, targetMap[targetKey].sample, batch.usedCounts[profile.id] || 0);
 
-    setExhausted((current) => ({
-      ...current,
-      [profile.id]: result.exhausted
-    }));
-
-    if (!result.sequence) return;
-
-    setSequences((current) => ({
-      ...current,
-      [profile.id]: result.sequence
-    }));
-    setUsedCounts((current) => ({
-      ...current,
-      [profile.id]: result.nextUsedCount
-    }));
-    setInjected(false);
+      return {
+        ...current,
+        [targetKey]: {
+          ...batch,
+          exhausted: {
+            ...batch.exhausted,
+            [profile.id]: result.exhausted
+          },
+          injected: result.sequence ? false : batch.injected,
+          sequences: result.sequence
+            ? {
+              ...batch.sequences,
+              [profile.id]: result.sequence
+            }
+            : batch.sequences,
+          usedCounts: result.sequence
+            ? {
+              ...batch.usedCounts,
+              [profile.id]: result.nextUsedCount
+            }
+            : batch.usedCounts
+        }
+      };
+    });
     setExported(false);
   };
 
-  const handleGenerateBatch = () => {
-    const batch = generateBatch(selectedSample, usedCounts);
+  const handleGenerateBatch = (targetKey) => {
+    setBatchStates((current) => {
+      const batch = current[targetKey] || createEmptyBatchState();
+      const nextBatch = generateBatch(targetMap[targetKey].sample, batch.usedCounts);
 
-    setSequences((current) => ({
-      ...current,
-      ...batch.sequences
-    }));
-    setUsedCounts(batch.usedCounts);
-    setExhausted(batch.exhausted);
-
-    if (Object.keys(batch.sequences).length > 0) {
-      setInjected(false);
-      setExported(false);
-    }
+      return {
+        ...current,
+        [targetKey]: {
+          exhausted: nextBatch.exhausted,
+          injected: Object.keys(nextBatch.sequences).length > 0 ? false : batch.injected,
+          sequences: {
+            ...batch.sequences,
+            ...nextBatch.sequences
+          },
+          usedCounts: nextBatch.usedCounts
+        }
+      };
+    });
+    setExported(false);
   };
 
-  const handleBatchInject = () => {
+  const handleBatchInject = (targetKey) => {
+    const target = targetMap[targetKey];
+    const batch = batchStates[targetKey];
+    const allGenerated = profiles.every((profile) => batch.sequences[profile.id]);
     if (!hasFile || !allGenerated) return;
 
-    const injectionBlock = formatInjectionBlock(sequences, selectedSample);
+    const sequenceEntries = Object.values(batch.sequences);
+    const injectionBlock = formatInjectionBlock(batch.sequences, target.sample, {
+      sourceKey: target.key,
+      subjectLabel: target.title
+    });
+    const event = {
+      fileName: fileName || "affirmation.txt",
+      generatedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      id: `${target.key}-${target.sample.id}-${Date.now()}`,
+      sampleId: target.sample.id,
+      sequenceCount: sequenceEntries.length,
+      sourceSampleId: selectedSample.id,
+      subjectKey: target.key,
+      subjectLabel: target.title,
+      totalBases: sequenceEntries.reduce((sum, entry) => sum + entry.bases, 0),
+      uniqueUsed: Object.values(batch.usedCounts).reduce((sum, count) => sum + count, 0)
+    };
+
     setAffirmationText((current) => `${current.trimEnd()}\n${injectionBlock}\n`);
-    setInjected(true);
+    setBatchStates((current) => ({
+      ...current,
+      [targetKey]: {
+        ...current[targetKey],
+        injected: true
+      }
+    }));
+    onBatchInject(event);
     setExported(false);
   };
 
@@ -425,7 +607,7 @@ function AffirmationBatchPanel({ selectedSample }) {
       <div className="affirmation-head">
         <div>
           <h2>Affirmation Batch Splice</h2>
-          <p>Target: affirmation.txt · Synthetic five-track splice batch</p>
+          <p>Target: affirmation.txt · Wolf and human synthetic splice batches</p>
         </div>
         <div className="affirmation-actions">
           <label className="command-button file-command">
@@ -433,14 +615,6 @@ function AffirmationBatchPanel({ selectedSample }) {
             Import affirmation.txt
             <input type="file" accept=".txt,text/plain" onChange={handleImport} />
           </label>
-          <button className="command-button primary" type="button" disabled={allExhausted} onClick={handleGenerateBatch}>
-            <Layers size={16} />
-            Generate Batch
-          </button>
-          <button className="command-button confirm" type="button" disabled={!hasFile || !allGenerated} onClick={handleBatchInject}>
-            <CheckCircle2 size={16} />
-            Confirm Batch Inject
-          </button>
           <button className="command-button" type="button" disabled={!affirmationText} onClick={handleExport}>
             <Download size={16} />
             Export affirmation.txt
@@ -450,21 +624,22 @@ function AffirmationBatchPanel({ selectedSample }) {
       <div className="affirmation-status">
         <span className={hasFile ? "ready" : ""}>{hasFile ? fileName : "No file imported"}</span>
         <span>{lineCount} lines loaded</span>
-        <span>{Object.keys(sequences).length}/5 generated</span>
-        <span>{formatSequenceCount(uniqueUsedCount)} unique strings used</span>
-        <span className={injected ? "ready" : ""}>{injected ? "Batch injected" : "Pending injection"}</span>
+        <span>{formatSequenceCount(totalUniqueUsed)} unique strings used</span>
+        <span>{targets.filter((target) => batchStates[target.key].injected).length}/2 batches injected</span>
         <span className={exported ? "ready" : ""}>{exported ? "Export launched" : "Export pending"}</span>
       </div>
-      <div className="sequence-grid">
-        {profiles.map((profile) => (
-          <SequenceHudCard
-            key={profile.id}
-            profile={profile}
-            generated={sequences[profile.id]}
-            usedCount={usedCounts[profile.id] || 0}
-            possibleCount={possibleCounts[profile.id]}
-            exhausted={Boolean(exhausted[profile.id])}
-            onGenerate={handleGenerateOne}
+      <div className="splice-lanes">
+        {targets.map((target) => (
+          <SpliceLane
+            key={target.key}
+            batch={batchStates[target.key]}
+            hasFile={hasFile}
+            onGenerateBatch={handleGenerateBatch}
+            onGenerateOne={handleGenerateOne}
+            onInject={handleBatchInject}
+            possibleCounts={possibleCounts}
+            profiles={profiles}
+            target={target}
           />
         ))}
       </div>
@@ -476,10 +651,13 @@ function AffirmationBatchPanel({ selectedSample }) {
   );
 }
 
-function VariantTable({ selectedSample, tab, onTabChange }) {
+function VariantTable({ selectedSample, tab, onTabChange, sectionRef }) {
   const [query, setQuery] = useState("");
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
   const [consequence, setConsequence] = useState("All Consequences");
+  const [qualityFilter, setQualityFilter] = useState("All Filters");
+  const [rowsPerPage, setRowsPerPage] = useState(5);
+  const [page, setPage] = useState(1);
 
   const filteredVariants = useMemo(() => {
     return variants.filter((variant) => {
@@ -488,12 +666,22 @@ function VariantTable({ selectedSample, tab, onTabChange }) {
       const matchesTab = tab === "SNP" ? variant.type === "SNP" : variant.type === "Indel";
       const matchesStatus = !showFlaggedOnly || variant.status === "Flagged";
       const matchesConsequence = consequence === "All Consequences" || variant.impact === consequence;
-      return matchesQuery && matchesTab && matchesStatus && matchesConsequence;
+      const matchesFilter = qualityFilter === "All Filters" || variant.filter === qualityFilter;
+      return matchesQuery && matchesTab && matchesStatus && matchesConsequence && matchesFilter;
     });
-  }, [consequence, query, showFlaggedOnly, tab]);
+  }, [consequence, qualityFilter, query, showFlaggedOnly, tab]);
+  const pageCount = Math.max(1, Math.ceil(filteredVariants.length / rowsPerPage));
+  const currentPage = Math.min(page, pageCount);
+  const firstRow = filteredVariants.length === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1;
+  const pagedVariants = filteredVariants.slice(firstRow - 1, firstRow - 1 + rowsPerPage);
+  const lastRow = filteredVariants.length === 0 ? 0 : Math.min(firstRow + pagedVariants.length - 1, filteredVariants.length);
+
+  useEffect(() => {
+    setPage(1);
+  }, [consequence, qualityFilter, query, rowsPerPage, showFlaggedOnly, tab]);
 
   return (
-    <section className="variant-section" aria-label="Variant calls">
+    <section className="variant-section" aria-label="Variant calls" ref={sectionRef}>
       <div className="variant-heading">
         <h2>Variant Calls - {selectedSample.id}</h2>
         <div className="variant-tabs" role="tablist" aria-label="Variant type">
@@ -522,7 +710,7 @@ function VariantTable({ selectedSample, tab, onTabChange }) {
           <option>Moderate</option>
           <option>Low</option>
         </select>
-        <select aria-label="All filters">
+        <select value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value)} aria-label="Quality filter">
           <option>All Filters</option>
           <option>PASS</option>
           <option>q10</option>
@@ -532,7 +720,7 @@ function VariantTable({ selectedSample, tab, onTabChange }) {
           <input type="checkbox" checked={showFlaggedOnly} onChange={(event) => setShowFlaggedOnly(event.target.checked)} />
           Show flagged only
         </label>
-        <span className="variant-count">12,842 variants</span>
+        <span className="variant-count">{filteredVariants.length} visible calls</span>
         <button className="tool-button" type="button"><Columns3 size={16} /> Columns</button>
         <button className="icon-button bordered" type="button" aria-label="Download variants"><Download size={17} /></button>
       </div>
@@ -556,7 +744,7 @@ function VariantTable({ selectedSample, tab, onTabChange }) {
             </tr>
           </thead>
           <tbody>
-            {filteredVariants.map((variant) => (
+            {pagedVariants.map((variant) => (
               <tr key={`${variant.chr}-${variant.position}`}>
                 <td>{variant.chr}</td>
                 <td>{variant.position}</td>
@@ -580,20 +768,29 @@ function VariantTable({ selectedSample, tab, onTabChange }) {
         ) : null}
       </div>
       <div className="pagination-row">
-        <span>Rows per page: <button type="button">25 <ChevronDown size={14} /></button></span>
-        <span>1-25 of 12,842</span>
-        <button className="icon-button" type="button" aria-label="Previous page"><ChevronLeft size={18} /></button>
-        <button className="icon-button" type="button" aria-label="Next page"><ChevronRight size={18} /></button>
+        <span>
+          Rows per page:
+          <select value={rowsPerPage} onChange={(event) => setRowsPerPage(Number(event.target.value))} aria-label="Rows per page">
+            <option value={3}>3</option>
+            <option value={5}>5</option>
+            <option value={25}>25</option>
+          </select>
+        </span>
+        <span>{firstRow}-{lastRow} of {filteredVariants.length}</span>
+        <button className="icon-button" type="button" disabled={currentPage <= 1} aria-label="Previous page" onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={18} /></button>
+        <button className="icon-button" type="button" disabled={currentPage >= pageCount} aria-label="Next page" onClick={() => setPage((value) => Math.min(pageCount, value + 1))}><ChevronRight size={18} /></button>
       </div>
     </section>
   );
 }
 
-function Inspector({ selectedSample, reportItems, onAddToReport }) {
+function Inspector({ injectionEvents, panelRef, selectedSample, reportItems, onAddToReport }) {
   const included = reportItems.includes(selectedSample.id);
+  const sampleInjections = injectionEvents.filter((event) => event.sourceSampleId === selectedSample.id);
+  const latestInjection = sampleInjections[0];
 
   return (
-    <aside className="inspector" aria-label="Sample inspector">
+    <aside className="inspector" aria-label="Sample inspector" ref={panelRef}>
       <div className="inspector-head">
         <h2>Sample Inspector</h2>
         <div>
@@ -633,6 +830,28 @@ function Inspector({ selectedSample, reportItems, onAddToReport }) {
         <div><dt>Lineage</dt><dd>{selectedSample.lineage}</dd></div>
         <div><dt>Confidence</dt><dd>{selectedSample.confidence.toFixed(1)}%</dd></div>
       </dl>
+      <section className="injection-summary" aria-label="Batch injection summary">
+        <h4>Batch Injects</h4>
+        {latestInjection ? (
+          <>
+            <dl className="details-list compact">
+              <div><dt>Latest</dt><dd>{latestInjection.subjectLabel}</dd></div>
+              <div><dt>Target</dt><dd>{latestInjection.sampleId}</dd></div>
+              <div><dt>Sequences</dt><dd>{latestInjection.sequenceCount}</dd></div>
+              <div><dt>Bases</dt><dd>{latestInjection.totalBases}</dd></div>
+              <div><dt>Runs Used</dt><dd>{latestInjection.uniqueUsed}</dd></div>
+              <div><dt>Time</dt><dd>{latestInjection.generatedAt}</dd></div>
+            </dl>
+            <div className="injection-stack">
+              {sampleInjections.slice(0, 3).map((event) => (
+                <span key={event.id}>{event.subjectLabel}: {event.sequenceCount} blocks into {event.fileName}</span>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p>No batch injects staged for this sample.</p>
+        )}
+      </section>
       <button className={included ? "report-button included" : "report-button"} type="button" onClick={() => onAddToReport(selectedSample.id)}>
         <FileText size={17} />
         {included ? "Added to Report" : "Add to Report"}
@@ -648,6 +867,29 @@ export default function App() {
   const [running, setRunning] = useState(true);
   const [activeNav, setActiveNav] = useState("Overview");
   const [reportItems, setReportItems] = useState([]);
+  const [injectionEvents, setInjectionEvents] = useState([]);
+  const overviewRef = useRef(null);
+  const samplesRef = useRef(null);
+  const lineageRef = useRef(null);
+  const variantsRef = useRef(null);
+  const reportsRef = useRef(null);
+  const sectionRefs = {
+    Lineage: lineageRef,
+    Overview: overviewRef,
+    Reports: reportsRef,
+    Samples: samplesRef,
+    Variants: variantsRef
+  };
+  const humanTarget = useMemo(
+    () => ({
+      id: `HS-${selectedSample.id.split("-")[1] || selectedSample.id}`,
+      species: "Human",
+      latin: "Homo sapiens",
+      lineage: "Homo sapiens",
+      status: "Passed"
+    }),
+    [selectedSample.id]
+  );
 
   const toggleReportItem = (sampleId) => {
     setReportItems((current) =>
@@ -655,9 +897,18 @@ export default function App() {
     );
   };
 
+  const recordBatchInjection = (event) => {
+    setInjectionEvents((current) => [event, ...current].slice(0, 12));
+  };
+
+  const handleNavChange = (label) => {
+    setActiveNav(label);
+    sectionRefs[label]?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
     <div className="app-shell">
-      <Sidebar activeNav={activeNav} onNavChange={setActiveNav} />
+      <Sidebar activeNav={activeNav} onNavChange={handleNavChange} />
       <div className="main-shell">
         <Header running={running} onRunToggle={() => setRunning((value) => !value)} />
         <div className="content-grid">
@@ -666,13 +917,14 @@ export default function App() {
             onSelectSample={setSelectedSample}
             sampleFilter={sampleFilter}
             onFilterChange={setSampleFilter}
+            panelRef={samplesRef}
           />
           <div className="middle-column">
-            <Workspace selectedSample={selectedSample} />
-            <AffirmationBatchPanel selectedSample={selectedSample} />
-            <VariantTable selectedSample={selectedSample} tab={variantTab} onTabChange={setVariantTab} />
+            <Workspace selectedSample={selectedSample} overviewRef={overviewRef} lineageRef={lineageRef} />
+            <AffirmationBatchPanel humanTarget={humanTarget} selectedSample={selectedSample} onBatchInject={recordBatchInjection} />
+            <VariantTable selectedSample={selectedSample} sectionRef={variantsRef} tab={variantTab} onTabChange={setVariantTab} />
           </div>
-          <Inspector selectedSample={selectedSample} reportItems={reportItems} onAddToReport={toggleReportItem} />
+          <Inspector injectionEvents={injectionEvents} panelRef={reportsRef} selectedSample={selectedSample} reportItems={reportItems} onAddToReport={toggleReportItem} />
         </div>
       </div>
     </div>
