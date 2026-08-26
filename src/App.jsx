@@ -32,8 +32,10 @@ import {
   formatSequenceCount,
   generateBatch,
   generateNextSequence,
+  getDefaultTargetStructure,
   getSequenceCapacity,
-  getSequenceProfiles
+  getSequenceProfiles,
+  getTargetStructures
 } from "./sequenceGenerators.js";
 
 const assetPath = (path) => `${import.meta.env.BASE_URL}${path}`;
@@ -59,11 +61,17 @@ const genomeScopes = [
   { value: "hotspots", label: "Variant Hotspots" }
 ];
 
-const createEmptyBatchState = () => ({
+const createEmptyBatchState = (targetId = "") => ({
   exhausted: {},
   injected: false,
   sequences: {},
+  targetId,
   usedCounts: {}
+});
+
+const createInitialBatchStates = () => ({
+  human: createEmptyBatchState(getDefaultTargetStructure("human").id),
+  wolf: createEmptyBatchState(getDefaultTargetStructure("wolf").id)
 });
 
 function StatusPill({ status }) {
@@ -351,6 +359,7 @@ function Workspace({ selectedSample, overviewRef, lineageRef }) {
 function SequenceHudCard({ profile, generated, targetLabel, usedCount, possibleCount, exhausted, onGenerate }) {
   const displayUsed = formatSequenceCount(usedCount);
   const nextLabel = generated ? "Generate Next" : profile.action;
+  const focusLabel = generated ? generated.targetLabel : targetLabel;
 
   return (
     <article className={`sequence-card ${profile.accent} ${exhausted ? "exhausted" : ""}`}>
@@ -360,6 +369,7 @@ function SequenceHudCard({ profile, generated, targetLabel, usedCount, possibleC
         {generated ? <CheckCircle2 size={15} /> : null}
       </div>
       <code>{generated ? generated.sequence.slice(0, 34) : "Awaiting splice generation"}</code>
+      <small className="sequence-focus">{focusLabel}</small>
       <small className="sequence-pool">
         {exhausted ? "Sequence space exhausted" : `${displayUsed}/${possibleCount} used`}
       </small>
@@ -382,6 +392,7 @@ function SpliceLane({
   onGenerateBatch,
   onGenerateOne,
   onInject,
+  onTargetChange,
   possibleCounts,
   profiles,
   target
@@ -400,6 +411,19 @@ function SpliceLane({
         </div>
         <StatusPill status={batch.injected ? "Passed" : target.sample.status} />
       </div>
+      <label className="target-control">
+        <span>{target.shortLabel} target structure</span>
+        <select
+          value={target.focus.id}
+          onChange={(event) => onTargetChange(target.key, event.target.value)}
+          aria-label={`${target.shortLabel} target structure`}
+        >
+          {target.options.map((option) => (
+            <option key={option.id} value={option.id}>{option.label}</option>
+          ))}
+        </select>
+      </label>
+      <div className="target-system">{target.focus.system}</div>
       <div className="lane-actions">
         <button className="command-button primary" type="button" disabled={allExhausted} onClick={() => onGenerateBatch(target.key)}>
           <Layers size={16} />
@@ -420,7 +444,7 @@ function SpliceLane({
           <SequenceHudCard
             key={`${target.key}-${profile.id}`}
             profile={profile}
-            targetLabel={target.title}
+            targetLabel={target.focus.label}
             generated={batch.sequences[profile.id]}
             usedCount={batch.usedCounts[profile.id] || 0}
             possibleCount={possibleCounts[profile.id]}
@@ -436,28 +460,36 @@ function SpliceLane({
 function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   const [fileName, setFileName] = useState("");
   const [affirmationText, setAffirmationText] = useState("");
-  const [batchStates, setBatchStates] = useState({
-    human: createEmptyBatchState(),
-    wolf: createEmptyBatchState()
-  });
+  const [batchStates, setBatchStates] = useState(createInitialBatchStates);
   const [exported, setExported] = useState(false);
   const profiles = getSequenceProfiles();
+  const targetOptions = useMemo(
+    () => ({
+      human: getTargetStructures("human"),
+      wolf: getTargetStructures("wolf")
+    }),
+    []
+  );
   const targets = useMemo(
     () => [
       {
         key: "wolf",
         title: "Wolf Splicing",
         shortLabel: "Wolf",
+        focus: targetOptions.wolf.find((option) => option.id === batchStates.wolf.targetId) || getDefaultTargetStructure("wolf"),
+        options: targetOptions.wolf,
         sample: selectedSample
       },
       {
         key: "human",
         title: "Human Splicing",
         shortLabel: "Human",
+        focus: targetOptions.human.find((option) => option.id === batchStates.human.targetId) || getDefaultTargetStructure("human"),
+        options: targetOptions.human,
         sample: humanTarget
       }
     ],
-    [humanTarget, selectedSample]
+    [batchStates.human.targetId, batchStates.wolf.targetId, humanTarget, selectedSample, targetOptions]
   );
   const targetMap = useMemo(
     () => Object.fromEntries(targets.map((target) => [target.key, target])),
@@ -465,9 +497,14 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   );
   const possibleCounts = useMemo(
     () => Object.fromEntries(
-      profiles.map((profile) => [profile.id, formatSequenceCount(getSequenceCapacity(profile))])
+      targets.map((target) => [
+        target.key,
+        Object.fromEntries(
+          profiles.map((profile) => [profile.id, formatSequenceCount(getSequenceCapacity(profile, target.focus))])
+        )
+      ])
     ),
-    [profiles]
+    [profiles, targets]
   );
 
   const hasFile = Boolean(fileName);
@@ -478,10 +515,10 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   const lineCount = affirmationText ? affirmationText.split(/\r\n|\r|\n/).length : 0;
 
   useEffect(() => {
-    setBatchStates({
-      human: createEmptyBatchState(),
-      wolf: createEmptyBatchState()
-    });
+    setBatchStates((current) => ({
+      human: createEmptyBatchState(current.human.targetId || getDefaultTargetStructure("human").id),
+      wolf: createEmptyBatchState(current.wolf.targetId || getDefaultTargetStructure("wolf").id)
+    }));
     setExported(false);
   }, [selectedSample.id]);
 
@@ -498,10 +535,19 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
     setExported(false);
   };
 
+  const handleTargetChange = (targetKey, targetId) => {
+    setBatchStates((current) => ({
+      ...current,
+      [targetKey]: createEmptyBatchState(targetId)
+    }));
+    setExported(false);
+  };
+
   const handleGenerateOne = (targetKey, profile) => {
     setBatchStates((current) => {
       const batch = current[targetKey] || createEmptyBatchState();
-      const result = generateNextSequence(profile, targetMap[targetKey].sample, batch.usedCounts[profile.id] || 0);
+      const focus = targetMap[targetKey].focus;
+      const result = generateNextSequence(profile, targetMap[targetKey].sample, batch.usedCounts[profile.id] || 0, focus);
 
       return {
         ...current,
@@ -518,6 +564,7 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
               [profile.id]: result.sequence
             }
             : batch.sequences,
+          targetId: focus.id,
           usedCounts: result.sequence
             ? {
               ...batch.usedCounts,
@@ -533,7 +580,8 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
   const handleGenerateBatch = (targetKey) => {
     setBatchStates((current) => {
       const batch = current[targetKey] || createEmptyBatchState();
-      const nextBatch = generateBatch(targetMap[targetKey].sample, batch.usedCounts);
+      const focus = targetMap[targetKey].focus;
+      const nextBatch = generateBatch(targetMap[targetKey].sample, batch.usedCounts, focus);
 
       return {
         ...current,
@@ -544,6 +592,7 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
             ...batch.sequences,
             ...nextBatch.sequences
           },
+          targetId: focus.id,
           usedCounts: nextBatch.usedCounts
         }
       };
@@ -571,6 +620,8 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
       sourceSampleId: selectedSample.id,
       subjectKey: target.key,
       subjectLabel: target.title,
+      targetLabel: target.focus.label,
+      targetSystem: target.focus.system,
       totalBases: sequenceEntries.reduce((sum, entry) => sum + entry.bases, 0),
       uniqueUsed: Object.values(batch.usedCounts).reduce((sum, count) => sum + count, 0)
     };
@@ -637,7 +688,8 @@ function AffirmationBatchPanel({ humanTarget, onBatchInject, selectedSample }) {
             onGenerateBatch={handleGenerateBatch}
             onGenerateOne={handleGenerateOne}
             onInject={handleBatchInject}
-            possibleCounts={possibleCounts}
+            onTargetChange={handleTargetChange}
+            possibleCounts={possibleCounts[target.key]}
             profiles={profiles}
             target={target}
           />
@@ -836,6 +888,8 @@ function Inspector({ injectionEvents, panelRef, selectedSample, reportItems, onA
           <>
             <dl className="details-list compact">
               <div><dt>Latest</dt><dd>{latestInjection.subjectLabel}</dd></div>
+              <div><dt>Focus</dt><dd>{latestInjection.targetLabel}</dd></div>
+              <div><dt>System</dt><dd>{latestInjection.targetSystem}</dd></div>
               <div><dt>Target</dt><dd>{latestInjection.sampleId}</dd></div>
               <div><dt>Sequences</dt><dd>{latestInjection.sequenceCount}</dd></div>
               <div><dt>Bases</dt><dd>{latestInjection.totalBases}</dd></div>
@@ -844,7 +898,7 @@ function Inspector({ injectionEvents, panelRef, selectedSample, reportItems, onA
             </dl>
             <div className="injection-stack">
               {sampleInjections.slice(0, 3).map((event) => (
-                <span key={event.id}>{event.subjectLabel}: {event.sequenceCount} blocks into {event.fileName}</span>
+                <span key={event.id}>{event.subjectLabel}: {event.targetLabel} focus into {event.fileName}</span>
               ))}
             </div>
           </>

@@ -1017,6 +1017,37 @@ h2 {
   white-space: nowrap;
 }
 
+.target-control {
+  display: grid;
+  grid-template-columns: minmax(116px, 0.42fr) minmax(140px, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.target-control span {
+  color: #b6cad2;
+  font-size: 11px;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.target-control select {
+  height: 30px;
+  font-size: 11px;
+}
+
+.target-system {
+  min-height: 24px;
+  padding: 5px 7px;
+  border: 1px solid rgba(54, 217, 230, 0.16);
+  border-radius: 6px;
+  background: rgba(6, 14, 19, 0.42);
+  color: #c7dbe1;
+  font-size: 10px;
+  font-weight: 680;
+  line-height: 1.35;
+}
+
 .lane-actions,
 .lane-status {
   display: flex;
@@ -1112,6 +1143,17 @@ h2 {
   font-size: 11px;
   line-height: 1.35;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sequence-focus {
+  min-height: 14px;
+  overflow: hidden;
+  color: #cfe2e7;
+  font-size: 10px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 

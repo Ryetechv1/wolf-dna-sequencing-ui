@@ -56,20 +56,83 @@ const sequenceProfiles = [
   }
 ];
 
+const targetStructureCatalogs = {
+  wolf: [
+    { id: "skeletal", label: "Skeletal", system: "Frame density and joint alignment", marker: "CAGTACGGA", terminal: "GATCGA" },
+    { id: "muscular", label: "Muscular", system: "Fast-twitch power and endurance fibers", marker: "GCTTAACCG", terminal: "CTTAGC" },
+    { id: "tail", label: "Tail", system: "Caudal balance and signaling", marker: "ATCCGTAAG", terminal: "TGCCTA" },
+    { id: "fur", label: "Fur", system: "Guard coat, undercoat, and pigment banding", marker: "TTGACCGTA", terminal: "ACGTTC" },
+    { id: "ears", label: "Ears", system: "Auricular shape and acoustic orientation", marker: "CGATTACCG", terminal: "TAGCCA" },
+    { id: "legs", label: "Legs", system: "Stride length and limb drive", marker: "AGGCTTACA", terminal: "GCTAAC" },
+    { id: "paws", label: "Paws", system: "Pads, digits, and ground contact", marker: "TACCGGATA", terminal: "CATTGG" },
+    { id: "skin", label: "Skin", system: "Dermal barrier and follicle bed", marker: "CCATGGTAA", terminal: "TGACCA" },
+    { id: "eyes", label: "Eyes", system: "Retinal focus and low-light acuity", marker: "GGAATCCAT", terminal: "ACTGGA" },
+    { id: "head", label: "Head", system: "Cranial profile and sensory layout", marker: "AATGCCGTA", terminal: "GGCATT" },
+    { id: "muzzle", label: "Muzzle", system: "Olfactory reach and jaw geometry", marker: "CTAGGATCA", terminal: "TAACGG" },
+    { id: "claws", label: "Claws", system: "Keratin hook and traction edge", marker: "GTCATAGGC", terminal: "CCGTAA" },
+    { id: "instinctual", label: "Instinctual", system: "Predatory attention and pack response", marker: "TGGCAATCT", terminal: "ATCGGT" }
+  ],
+  human: [
+    { id: "skeletal", label: "Skeletal", system: "Bone matrix and posture support", marker: "GATACCGTA", terminal: "CTAGGA" },
+    { id: "muscular", label: "Muscular", system: "Muscle tone and motor output", marker: "ACCGTTAGA", terminal: "GACTTC" },
+    { id: "nervous", label: "Nervous", system: "Neural signaling and sensory routing", marker: "TGCAAGCTA", terminal: "CGAATG" },
+    { id: "cardiovascular", label: "Cardiovascular", system: "Circulation and vascular transport", marker: "CCTAGGAAT", terminal: "TACGAC" },
+    { id: "respiratory", label: "Respiratory", system: "Gas exchange and airway rhythm", marker: "AAGTCGCTA", terminal: "GGTACA" },
+    { id: "digestive", label: "Digestive", system: "Nutrient processing and gut lining", marker: "GTACCTAGG", terminal: "ACTTGC" },
+    { id: "endocrine", label: "Endocrine", system: "Hormonal timing and gland response", marker: "TTCGACGAT", terminal: "CAGTTA" },
+    { id: "immune", label: "Immune", system: "Recognition, response, and recovery", marker: "CGGTAATCC", terminal: "TTCGGA" },
+    { id: "integumentary", label: "Integumentary", system: "Skin, hair, and barrier tissue", marker: "ATGGCCTAA", terminal: "GCTTAC" },
+    { id: "renal", label: "Renal", system: "Fluid balance and filtration", marker: "GCTAACGGT", terminal: "ATGCCA" },
+    { id: "reproductive", label: "Reproductive", system: "Germline protection and tissue signaling", marker: "TACGATGGC", terminal: "CGTTAG" },
+    { id: "ocular", label: "Ocular", system: "Vision focus and retinal handling", marker: "CCAAGTTGC", terminal: "TAGGCT" },
+    { id: "craniofacial", label: "Craniofacial", system: "Skull contour and facial structure", marker: "AGTCCTGAA", terminal: "GCATTC" },
+    { id: "metabolic", label: "Metabolic", system: "Energy turnover and cellular demand", marker: "CTTGAACCG", terminal: "AAGTCG" }
+  ]
+};
+
 export function getSequenceProfiles() {
   return sequenceProfiles;
+}
+
+export function getTargetStructures(subjectKey = "wolf") {
+  return targetStructureCatalogs[subjectKey] || targetStructureCatalogs.wolf;
+}
+
+export function getDefaultTargetStructure(subjectKey = "wolf") {
+  return getTargetStructures(subjectKey)[0];
 }
 
 function uniqueAlphabet(profile) {
   return [...new Set(profile.alphabet.split(""))];
 }
 
-function variableBodyLength(profile) {
-  return Math.max(0, profile.length - profile.motif.length - profile.ending.length);
+function normalizeTarget(profile, target) {
+  if (!target) {
+    return {
+      id: "whole",
+      label: "Whole Sample",
+      system: "Unfocused sample-wide sequence",
+      marker: "",
+      terminal: ""
+    };
+  }
+
+  const convertBases = (value) => profile.id === "rna" ? value.replaceAll("T", "U") : value;
+  return {
+    ...target,
+    marker: convertBases(target.marker),
+    terminal: convertBases(target.terminal)
+  };
 }
 
-export function getSequenceCapacity(profile) {
-  return BigInt(uniqueAlphabet(profile).length) ** BigInt(variableBodyLength(profile));
+function variableBodyLength(profile, target) {
+  const selectedTarget = normalizeTarget(profile, target);
+  const fixedLength = profile.motif.length + selectedTarget.marker.length + selectedTarget.terminal.length + profile.ending.length;
+  return Math.max(0, profile.length - fixedLength);
+}
+
+export function getSequenceCapacity(profile, target) {
+  return BigInt(uniqueAlphabet(profile).length) ** BigInt(variableBodyLength(profile, target));
 }
 
 export function formatSequenceCount(value) {
@@ -104,9 +167,18 @@ function greatestCommonDivisor(left, right) {
   return a;
 }
 
-function getSequenceIndex(profile, sampleId, generationIndex) {
-  const capacity = getSequenceCapacity(profile);
-  const seed = `${sampleId}-${profile.id}-${profile.length}`;
+function getSequenceIndex(profile, sampleId, generationIndex, target) {
+  const capacity = getSequenceCapacity(profile, target);
+  const selectedTarget = normalizeTarget(profile, target);
+  const seed = [
+    sampleId,
+    profile.id,
+    profile.length,
+    selectedTarget.id,
+    selectedTarget.system,
+    selectedTarget.marker,
+    selectedTarget.terminal
+  ].join("-");
   const offset = hashBigInt(`${seed}-offset`) % capacity;
   let stride = (hashBigInt(`${seed}-stride`) % capacity) || 1n;
 
@@ -117,17 +189,18 @@ function getSequenceIndex(profile, sampleId, generationIndex) {
   return (offset + BigInt(generationIndex) * stride) % capacity;
 }
 
-function buildSequence(profile, sampleId, generationIndex) {
+function buildSequence(profile, sampleId, generationIndex, target) {
   const alphabet = uniqueAlphabet(profile);
-  const bodyLength = variableBodyLength(profile);
-  let index = getSequenceIndex(profile, sampleId, generationIndex);
+  const selectedTarget = normalizeTarget(profile, target);
+  const bodyLength = variableBodyLength(profile, target);
+  let index = getSequenceIndex(profile, sampleId, generationIndex, target);
   const body = Array.from({ length: bodyLength }, () => {
     const baseIndex = Number(index % BigInt(alphabet.length));
     index /= BigInt(alphabet.length);
     return alphabet[baseIndex];
   }).join("");
 
-  return `${profile.motif}${body}${profile.ending}`;
+  return `${profile.motif}${selectedTarget.marker}${body}${selectedTarget.terminal}${profile.ending}`;
 }
 
 function gcPercent(sequence) {
@@ -135,8 +208,9 @@ function gcPercent(sequence) {
   return Math.round((gcCount / sequence.length) * 1000) / 10;
 }
 
-export function generateSequence(profile, sample, generationIndex = 0) {
-  const sequence = buildSequence(profile, sample.id, generationIndex);
+export function generateSequence(profile, sample, generationIndex = 0, target) {
+  const selectedTarget = normalizeTarget(profile, target);
+  const sequence = buildSequence(profile, sample.id, generationIndex, target);
   const usedCount = generationIndex + 1;
   return {
     id: profile.id,
@@ -144,18 +218,22 @@ export function generateSequence(profile, sample, generationIndex = 0) {
     label: profile.label,
     sampleId: sample.id,
     lineage: sample.lineage,
+    targetId: selectedTarget.id,
+    targetLabel: selectedTarget.label,
+    targetSystem: selectedTarget.system,
+    targetMarker: selectedTarget.marker,
     accent: profile.accent,
     sequence,
     bases: sequence.length,
     gc: gcPercent(sequence),
     usedCount,
-    possibleCount: formatSequenceCount(getSequenceCapacity(profile)),
-    splice: `${profile.motif} + synthetic body + ${profile.ending}`
+    possibleCount: formatSequenceCount(getSequenceCapacity(profile, target)),
+    splice: `${profile.motif} + ${selectedTarget.label} marker ${selectedTarget.marker} + synthetic body + ${selectedTarget.terminal} + ${profile.ending}`
   };
 }
 
-export function generateNextSequence(profile, sample, usedCount = 0) {
-  if (BigInt(usedCount) >= getSequenceCapacity(profile)) {
+export function generateNextSequence(profile, sample, usedCount = 0, target) {
+  if (BigInt(usedCount) >= getSequenceCapacity(profile, target)) {
     return {
       exhausted: true,
       sequence: null,
@@ -165,15 +243,15 @@ export function generateNextSequence(profile, sample, usedCount = 0) {
 
   return {
     exhausted: false,
-    sequence: generateSequence(profile, sample, usedCount),
+    sequence: generateSequence(profile, sample, usedCount, target),
     nextUsedCount: usedCount + 1
   };
 }
 
-export function generateBatch(sample, usedCounts = {}) {
+export function generateBatch(sample, usedCounts = {}, target) {
   return sequenceProfiles.reduce(
     (batch, profile) => {
-      const result = generateNextSequence(profile, sample, usedCounts[profile.id] || 0);
+      const result = generateNextSequence(profile, sample, usedCounts[profile.id] || 0, target);
       batch.exhausted[profile.id] = result.exhausted;
       batch.usedCounts[profile.id] = result.nextUsedCount;
 
@@ -206,6 +284,9 @@ export function formatInjectionBlock(sequences, sample, options = {}) {
         `subject=${subjectLabel.replace(/\s+/g, "_")}`,
         `organism=${sample.latin.replace(/\s+/g, "_")}`,
         `lineage=${entry.lineage.replace(/\s+/g, "_")}`,
+        `focus=${entry.targetId}`,
+        `structure=${entry.targetLabel.replace(/\s+/g, "_")}`,
+        `system=${entry.targetSystem.replace(/\s+/g, "_")}`,
         `bases=${entry.bases}`,
         `gc=${entry.gc}%`,
         `splice="${entry.splice}"`
@@ -219,7 +300,7 @@ export function formatInjectionBlock(sequences, sample, options = {}) {
     "=== LupineSeq Batch Splice Injection ===",
     `Target: ${subjectLabel}`,
     `Sample: ${sample.id} (${sample.species}, ${sample.latin})`,
-    "Note: Synthetic demonstration sequences generated by the UI; not for wet-lab synthesis, diagnosis, or field release.",
+    entries[0] ? `Focus: ${entries[0].targetLabel} (${entries[0].targetSystem})` : "Focus: Unspecified",
     fastaEntries,
     "=== End LupineSeq Batch Splice Injection ==="
   ].join("\n");
